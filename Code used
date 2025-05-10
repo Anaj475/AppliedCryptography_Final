@@ -1,1 +1,140 @@
 git clone https://gist.github.com/ajbozarth/65aee2084f7bc089704b4e7afb54801e
+Raw code oqsopenssl.md
+
+## Prerequisites 
+
+Set `WORKSPACE` to whatever dir you will be running these steps.
+
+```bash
+# If you are not running as root you might need to use "sudo apt" instead
+sudo apt update
+sudo apt -y install git build-essential perl cmake autoconf libtool zlib1g-dev
+
+export WORKSPACE=~/quantumsafe # set this to a working dir of your choice
+export BUILD_DIR=$WORKSPACE/build # this will contain all the build artifacts
+mkdir -p $BUILD_DIR/lib64
+ln -s $BUILD_DIR/lib64 $BUILD_DIR/lib
+```
+
+
+## Install OpenSSL
+
+https://github.com/openssl/openssl
+
+```bash
+cd $WORKSPACE
+
+git clone https://github.com/openssl/openssl.git
+cd openssl
+
+#OPTIONAL# git checkout c8ca810da9
+
+./Configure \
+  --prefix=$BUILD_DIR \
+  no-ssl no-tls1 no-tls1_1 no-afalgeng \
+  no-shared threads -lm
+
+make -j $(nproc)
+make -j $(nproc) install_sw install_ssldirs
+```
+
+## Install liboqs
+
+https://github.com/open-quantum-safe/liboqs
+
+```bash
+cd $WORKSPACE
+
+git clone https://github.com/open-quantum-safe/liboqs.git
+cd liboqs
+
+#OPTIONAL# git checkout 78e65bf1
+
+mkdir build && cd build
+
+cmake \
+  -DCMAKE_INSTALL_PREFIX=$BUILD_DIR \
+  -DBUILD_SHARED_LIBS=ON \
+  -DOQS_USE_OPENSSL=OFF \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DOQS_BUILD_ONLY_LIB=ON \
+  -DOQS_DIST_BUILD=ON \
+  ..
+
+make -j $(nproc)
+make -j $(nproc) install
+```
+
+## Install OSQ Provider
+
+https://github.com/open-quantum-safe/oqs-provider
+
+```bash
+cd $WORKSPACE
+
+git clone https://github.com/open-quantum-safe/oqs-provider.git
+cd oqs-provider
+
+#OPTIONAL# git checkout d540c28
+
+liboqs_DIR=$BUILD_DIR cmake \
+  -DCMAKE_INSTALL_PREFIX=$WORKSPACE/oqs-provider \
+  -DOPENSSL_ROOT_DIR=$BUILD_DIR \
+  -DCMAKE_BUILD_TYPE=Release \
+  -S . \
+  -B _build
+cmake --build _build
+
+# Manually copy the lib files into the build dir
+cp _build/lib/* $BUILD_DIR/lib/
+
+# We need to edit the openssl config to use the oqsprovider
+sed -i "s/default = default_sect/default = default_sect\noqsprovider = oqsprovider_sect/g" $BUILD_DIR/ssl/openssl.cnf &&
+sed -i "s/\[default_sect\]/\[default_sect\]\nactivate = 1\n\[oqsprovider_sect\]\nactivate = 1\n/g" $BUILD_DIR/ssl/openssl.cnf
+
+# These env vars need to be set for the oqsprovider to be used when using OpenSSL
+export OPENSSL_CONF=$BUILD_DIR/ssl/openssl.cnf
+export OPENSSL_MODULES=$BUILD_DIR/lib
+$BUILD_DIR/bin/openssl list -providers -verbose -provider oqsprovider
+```
+
+## Install cURL
+
+https://github.com/curl/curl
+
+```bash
+cd $WORKSPACE
+
+git clone https://github.com/curl/curl.git
+cd curl
+
+#OPTIONAL# git checkout 0eda1f6c9
+
+autoreconf -fi
+./configure \
+  LIBS="-lssl -lcrypto -lz" \
+  LDFLAGS="-Wl,-rpath,$BUILD_DIR/lib64 -L$BUILD_DIR/lib64 -Wl,-rpath,$BUILD_DIR/lib -L$BUILD_DIR/lib -Wl,-rpath,/lib64 -L/lib64 -Wl,-rpath,/lib -L/lib" \
+  CFLAGS="-O3 -fPIC" \
+  --prefix=$BUILD_DIR \
+  --with-ssl=$BUILD_DIR \
+  --with-zlib=/ \
+  --enable-optimize --enable-libcurl-option --enable-libgcc --enable-shared \
+  --enable-ldap=no --enable-ipv6 --enable-versioned-symbols \
+  --disable-manual \
+  --without-default-ssl-backend \
+  --without-librtmp --without-libidn2 \
+  --without-gnutls --without-mbedtls \
+  --without-wolfssl --without-libpsl
+
+make -j $(nproc)
+make -j $(nproc) install
+```
+
+### Try it out
+
+http://test.openquantumsafe.org
+
+```bash
+$BUILD_DIR/bin/curl -vk https://test.openquantumsafe.org/CA.crt --output $BUILD_DIR/ca.cert
+$BUILD_DIR/bin/curl -v --curves p521_kyber1024 --cacert $BUILD_DIR/ca.cert https://test.openquantumsafe.org:6130/
+```
